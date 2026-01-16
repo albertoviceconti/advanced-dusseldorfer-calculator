@@ -1,0 +1,103 @@
+@page "/children"
+@inject CalculationState State
+
+<PageTitle>Kinder</PageTitle>
+
+<h1>Kinder</h1>
+<p class="lead">Mindestens ein Kind erfassen. Du kannst weitere Kinder hinzuf&uuml;gen oder entfernen.</p>
+
+<button class="btn btn-outline-primary mb-3" @onclick="AddChild">Kind hinzufuegen</button>
+
+@for (int i = 0; i < State.Children.Count; i++)
+{
+    var child = State.Children[i];
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <strong>@child.Name</strong>
+            <div class="d-flex gap-2 align-items-center">
+                <span class="badge bg-secondary">Privilegiert u21: @(child.PrivilegedUnder21 ? "Ja" : "Nein")</span>
+                <button class="btn btn-sm btn-outline-danger" @onclick="@(() => RemoveChild(i))" disabled="@(State.Children.Count <= 1)">Entfernen</button>
+            </div>
+        </div>
+        <div class="card-body row g-3">
+            <div class="col-md-4">
+                <label class="form-label">Name</label>
+                <InputText class="form-control" @bind-Value="child.Name" />
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">Alter</label>
+                <InputNumber class="form-control" @bind-Value="child.Age" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Lebt bei</label>
+                <InputSelect class="form-select" @bind-Value="child.Residence">
+                    <option value="@ResidenceStatus.WithMother">Mutter</option>
+                    <option value="@ResidenceStatus.WithFather">Vater</option>
+                    <option value="@ResidenceStatus.OwnHousehold">Eigenem Haushalt</option>
+                </InputSelect>
+            </div>
+            <div class="col-md-3 d-flex align-items-end">
+                <div class="form-check">
+                    <InputCheckbox class="form-check-input" @bind-Value="child.KindergeldActive" />
+                    <label class="form-check-label ms-2">Kindergeld aktiv</label>
+                </div>
+            </div>
+            <div class="col-md-3 d-flex align-items-end">
+                <div class="form-check">
+                    <InputCheckbox class="form-check-input" @bind-Value="child.IsInGeneralSchool" />
+                    <label class="form-check-label ms-2">Schule (allg.)</label>
+                </div>
+            </div>
+            <div class="col-md-3 d-flex align-items-end">
+                <div class="form-check">
+                    <InputCheckbox class="form-check-input" @bind-Value="child.IsStudent" />
+                    <label class="form-check-label ms-2">Student</label>
+                </div>
+            </div>
+            <div class="col-md-3 d-flex align-items-end">
+                <div class="form-check">
+                    <InputCheckbox class="form-check-input" @bind-Value="child.HasMiniJob" />
+                    <label class="form-check-label ms-2">Minijob</label>
+                </div>
+            </div>
+            @if (child.HasMiniJob)
+            {
+                <div class="col-md-6">
+                    <label class="form-label">Netto Minijob</label>
+                    <div class="d-flex gap-2 align-items-end">
+                        <InputNumber class="form-control" @bind-Value="child.MiniJobIncome.Amount" />
+                        <InputSelect class="form-select" style="max-width: 160px;" @bind-Value="child.MiniJobIncome.Period">
+                            <option value="@Period.Monthly">monatlich</option>
+                            <option value="@Period.Yearly">jaehrlich</option>
+                        </InputSelect>
+                    </div>
+                    <div class="form-text">100 EUR Freibetrag f&uuml;r Sch&uuml;ler/Studierende wird automatisch abgezogen.</div>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+<div class="d-flex gap-2">
+    <NavLink class="btn btn-secondary" href="results">Zum Ergebnis</NavLink>
+    <NavLink class="btn btn-outline-secondary" href="father">Zurueck zum Start</NavLink>
+</div>
+
+@code {
+    protected override void OnInitialized()
+    {
+        State.EnsureAtLeastOneChild();
+    }
+
+    private void AddChild()
+    {
+        var name = $"Kind {State.Children.Count + 1}";
+        State.Children.Add(ChildInput.CreateDefault(name));
+    }
+
+    private void RemoveChild(int index)
+    {
+        if (State.Children.Count <= 1) return;
+        State.Children.RemoveAt(index);
+    }
+}

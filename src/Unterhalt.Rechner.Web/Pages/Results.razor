@@ -1,0 +1,173 @@
+@page "/results"
+@using System.IO
+@using System.Text
+@using System.Text.Json
+@inject CalculationState State
+@inject SupportCalculator Calculator
+@inject IJSRuntime JS
+
+<PageTitle>Ergebnis</PageTitle>
+
+<h1>Ergebnis</h1>
+<p class="lead">Unterhaltsanteile je Elternteil und Kind auf Basis der erfassten Daten.</p>
+
+@if (!State.Children.Any())
+{
+    <div class="alert alert-warning">Bitte zuerst mindestens ein Kind erfassen.</div>
+}
+else
+{
+    <div class="card mb-3">
+        <div class="card-header">Relevantes Einkommen</div>
+        <div class="card-body">
+            <p>Berechnet mit den pauschalen/absoluten Abz&uuml;gen pro Elternteil.</p>
+            <ul class="mb-0">
+                <li>Vater: <strong>@Incomes.Father.ToString("N2") EUR</strong></li>
+                <li>Mutter: <strong>@Incomes.Mother.ToString("N2") EUR</strong></li>
+            </ul>
+        </div>
+    </div>
+
+    @foreach (var row in ResultRows)
+    {
+        <div class="card mb-3">
+            <div class="card-header d-flex justify-content-between">
+                <span>@row.Child.Name (@row.Child.Age) - @(row.Child.PrivilegedUnder21 ? "privilegiert u21" : "nicht privilegiert")</span>
+                <span class="text-muted">Lebt bei: @ResidenceLabel(row.Child.Residence)</span>
+            </div>
+            <div class="card-body row">
+                <div class="col-md-6">
+                    <h6>Bedarf</h6>
+                    <ul>
+                        <li>Tabellenbedarf: <strong>@row.Need.TableNeed</strong> EUR</li>
+                        <li>Kindergeld angerechnet: <strong>@row.Need.ChildBenefitApplied</strong> EUR</li>
+                        <li>Netto-Bedarf nach Kindergeld: <strong>@row.Need.NetNeedAfterBenefit</strong> EUR</li>
+                        <li>Eigenes Einkommen (Minijob) angerechnet: <strong>@row.Need.ChildOwnContribution.ToString("N2")</strong> EUR</li>
+                        <li>Rest-Bedarf nach Minijob: <strong>@row.Need.NetNeedAfterOwnIncome.ToString("N2")</strong> EUR</li>
+                    </ul>
+                </div>
+                <div class="col-md-6">
+                    <h6>Zahlung</h6>
+                    <ul>
+                        <li>Vater zahlt: <strong>@row.Split.FatherPays.ToString("N2")</strong> EUR</li>
+                        <li>Mutter zahlt: <strong>@row.Split.MotherPays.ToString("N2")</strong> EUR</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    }
+
+    <div class="d-flex flex-wrap gap-2 mt-3 align-items-center">
+        <button class="btn btn-outline-primary" @onclick="DownloadSnapshot">Daten speichern</button>
+        <InputFile OnChange="LoadSnapshot" class="btn btn-outline-secondary" />
+        @if (!string.IsNullOrWhiteSpace(InfoMessage))
+        {
+            <span class="text-success align-self-center">@InfoMessage</span>
+        }
+        @if (!string.IsNullOrWhiteSpace(ErrorMessage))
+        {
+            <span class="text-danger align-self-center">@ErrorMessage</span>
+        }
+    </div>
+}
+
+@code {
+    private ParentRelevantIncome Incomes { get; set; } = new(0, 0);
+    private List<ResultRow> ResultRows { get; set; } = new();
+    private string? InfoMessage { get; set; }
+    private string? ErrorMessage { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        Recalculate();
+    }
+
+    private void Recalculate()
+    {
+        State.EnsureAtLeastOneChild();
+
+        var fatherIncome = State.Father.ToDomain();
+        var motherIncome = State.Mother.ToDomain();
+        Incomes = Calculator.ComputeParentsRelevantIncome(fatherIncome, motherIncome);
+
+        ResultRows = State.Children.Select(childInput =>
+        {
+            var child = childInput.ToDomain();
+            var need = Calculator.ComputeChildNeed(child, Incomes);
+            var split = Calculator.SplitByQuote(need, Incomes, childInput.PrivilegedUnder21);
+            return new ResultRow(childInput, need, split);
+        }).ToList();
+    }
+
+    private static string ResidenceLabel(ResidenceStatus status) => status switch
+    {
+        ResidenceStatus.WithFather => "Vater",
+        ResidenceStatus.WithMother => "Mutter",
+        ResidenceStatus.OwnHousehold => "Eigener Haushalt",
+        _ => "Unbekannt"
+    };
+
+    private CalculationSnapshot BuildSnapshot()
+    {
+        return new CalculationSnapshot
+        {
+            Father = CalculationState.CloneParent(State.Father),
+            Mother = CalculationState.CloneParent(State.Mother),
+            Children = State.Children.Select(CalculationState.CloneChild).ToList(),
+            Incomes = Incomes,
+            Results = ResultRows.Select(r => new SnapshotChildResult
+            {
+                Child = CalculationState.CloneChild(r.Child),
+                Need = r.Need,
+                Split = r.Split
+            }).ToList()
+        };
+    }
+
+    private async Task DownloadSnapshot()
+    {
+        ErrorMessage = null;
+        InfoMessage = null;
+
+        var snapshot = BuildSnapshot();
+        var json = JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = true });
+        var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
+        var fileName = $"unterhalt-snapshot-{DateTime.Now:yyyyMMddHHmmss}.json";
+
+        // Try Save File Picker (lets user choose location); fallback to download
+        await JS.InvokeVoidAsync("saveFileWithPicker", fileName, "application/json", base64);
+        InfoMessage = $"Gespeichert als '{fileName}'.";
+    }
+
+    private async Task LoadSnapshot(InputFileChangeEventArgs e)
+    {
+        ErrorMessage = null;
+        InfoMessage = null;
+
+        var file = e.File;
+        if (file == null) return;
+
+        try
+        {
+            using var stream = file.OpenReadStream(1024 * 1024); // 1 MB limit
+            using var reader = new StreamReader(stream);
+            var json = await reader.ReadToEndAsync();
+            var snapshot = JsonSerializer.Deserialize<CalculationSnapshot>(json);
+            if (snapshot == null)
+            {
+                ErrorMessage = "Konnte JSON nicht lesen.";
+                return;
+            }
+
+            State.LoadFromSnapshot(snapshot);
+            Recalculate();
+            InfoMessage = "Snapshot geladen.";
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Fehler beim Laden: {ex.Message}";
+        }
+    }
+
+    private sealed record ResultRow(ChildInput Child, ChildNeedResult Need, PaymentSplit Split);
+}

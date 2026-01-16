@@ -1,0 +1,321 @@
+@page "/father"
+@inject CalculationState State
+@inject IJSRuntime JS
+@inject TaxNoticeOcrService OcrService
+
+<PageTitle>Vater</PageTitle>
+
+<h1>Vater</h1>
+<p class="lead">Einkommen und Abz&uuml;ge des Vaters erfassen.</p>
+
+<div class="d-flex flex-wrap gap-2 mb-3 align-items-center">
+    <InputFile OnChange="OnOcrFileSelected" accept="image/*,.pdf" class="btn btn-outline-secondary" />
+    <span class="text-muted">Steuerbescheid/Recap laden (lokal per OCR)</span>
+    @if (!string.IsNullOrWhiteSpace(OcrStatus))
+    {
+        <span class="text-success">@OcrStatus</span>
+    }
+    @if (!string.IsNullOrWhiteSpace(OcrError))
+    {
+        <span class="text-danger">@OcrError</span>
+    }
+</div>
+
+<EditForm Model="Model" OnValidSubmit="OnSaved">
+    <div class="card mb-3">
+        <div class="card-body">
+            <label class="form-label fw-semibold">Eingabe-Modus</label>
+            <InputRadioGroup @bind-Value="Model.Mode">
+                <div class="form-check">
+                    <InputRadio class="form-check-input" Value="IncomeEntryMode.Detailed" />
+                    <label class="form-check-label ms-2">Detail (Brutto, Abz&uuml;ge, Immobilien)</label>
+                </div>
+                <div class="form-check">
+                    <InputRadio class="form-check-input" Value="IncomeEntryMode.Net" />
+                    <label class="form-check-label ms-2">Nur Nettoeinkommen (monatlich/jaehrlich)</label>
+                </div>
+            </InputRadioGroup>
+            <div class="form-text">Im Netto-Modus werden keine weiteren Abz&uuml;ge vorgenommen.</div>
+        </div>
+    </div>
+
+    @if (Model.Mode == IncomeEntryMode.Net)
+    {
+        <div class="row g-3">
+            <div class="col-md-6">
+                @MoneyField("Nettoeinkommen", Model.NetIncome)
+            </div>
+            <div class="col-md-6">
+                <div class="alert alert-info mb-0">
+                    Im Netto-Modus ignoriert die Berechnung Steuern, Abz&uuml;ge, Immobilien und Vorsorge – das eingegebene Nettoeinkommen wird direkt verwendet.
+                </div>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="row g-3">
+            <div class="col-md-6">
+                @MoneyField("Brutto", Model.Gross)
+            </div>
+            <div class="col-md-6">
+                @MoneyField("Steuern", Model.Taxes)
+            </div>
+            <div class="col-md-6">
+                @MoneyField("Sozialabgaben", Model.MandatorySocialSec)
+            </div>
+            <div class="col-md-6">
+                @MoneyField("Krankenversicherung", Model.HealthInsurance)
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Werbungskosten-Quote (%)</label>
+                <InputNumber class="form-control" @bind-Value="JobExpenseRatePercent" Step="0.1" />
+            </div>
+            <div class="col-md-6">
+                @MoneyField("Werbungskosten absolut (optional)", Model.JobExpensesAbsolute ??= MoneyInput.Monthly(), allowNull: true)
+            </div>
+            <div class="col-md-6">
+                @MoneyField("Zus. Altersvorsorge", Model.AdditionalPension)
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Vorsorge-Cap-Quote (%)</label>
+                <InputNumber class="form-control" @bind-Value="AdditionalPensionCapPercent" Step="0.1" />
+            </div>
+            <div class="col-md-6">
+                @MoneyField("Steuererstattung", Model.TaxRefund)
+            </div>
+            <div class="col-md-6">
+                @MoneyField("Sonstige Nettoeinkuenfte", Model.OtherNetIncomes)
+            </div>
+        </div>
+
+        <div class="mt-4">
+            <h5>Immobilien</h5>
+            <p class="text-muted">Vermietete Objekte oder selbstgenutztes Eigentum erfassen.</p>
+            <button type="button" class="btn btn-outline-primary mb-3" @onclick="AddProperty">Objekt hinzufuegen</button>
+
+            @if (!Model.Properties.Any())
+            {
+                <div class="alert alert-info">Noch keine Objekte erfasst.</div>
+            }
+
+            @for (int i = 0; i < Model.Properties.Count; i++)
+            {
+                var prop = Model.Properties[i];
+                <div class="card mb-3">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <div class="d-flex gap-2 align-items-center">
+                            <InputText class="form-control" style="max-width: 240px;" @bind-Value="prop.Label" />
+                            <div class="form-check ms-2">
+                                <InputCheckbox class="form-check-input" @bind-Value="prop.IsOwnerOccupied" />
+                                <label class="form-check-label ms-1">selbst bewohnt</label>
+                            </div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-danger" @onclick="(() => RemoveProperty(i))">Entfernen</button>
+                    </div>
+                    <div class="card-body row g-3">
+                    @if (!prop.IsOwnerOccupied)
+                    {
+                        <div class="col-md-6">
+                            @MoneyField("Mieteinnahmen", prop.RentIncome)
+                        </div>
+                        <div class="col-md-6">
+                            @MoneyField("Abziehbare Nebenkosten (kalte Anteile)", prop.OperatingCosts)
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="col-md-6">
+                            @MoneyField("Wohnvorteil (fiktive Miete)", prop.ImputedRent)
+                        </div>
+                    }
+                    <div class="col-md-6">
+                        @MoneyField("Zinsen", prop.Interest)
+                    </div>
+                    <div class="col-md-6">
+                        @MoneyField("Tilgung", prop.Principal)
+                    </div>
+                </div>
+            </div>
+        }
+        </div>
+    }
+
+    <div class="mt-3 d-flex gap-2">
+        <button type="submit" class="btn btn-primary">Speichern</button>
+        <NavLink class="btn btn-secondary" href="mother">Weiter zur Mutter</NavLink>
+        @if (Saved)
+        {
+            <span class="text-success align-self-center">Gespeichert.</span>
+        }
+    </div>
+</EditForm>
+
+@code {
+    private ParentIncomeInput Model => State.Father;
+    private bool Saved { get; set; }
+    private bool OcrBusy { get; set; }
+    private string? OcrStatus { get; set; }
+    private string? OcrError { get; set; }
+    private decimal JobExpenseRatePercent
+    {
+        get => Model.JobExpenseRate * 100m;
+        set => Model.JobExpenseRate = value / 100m;
+    }
+    private decimal AdditionalPensionCapPercent
+    {
+        get => Model.AdditionalPensionCapRate * 100m;
+        set => Model.AdditionalPensionCapRate = value / 100m;
+    }
+
+    private RenderFragment MoneyField(string label, MoneyInput value, bool allowNull = false) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "div");
+        builder.AddAttribute(seq++, "class", "d-flex gap-2 align-items-end");
+        builder.OpenElement(seq++, "div");
+        builder.AddAttribute(seq++, "class", "flex-fill");
+        builder.OpenElement(seq++, "label");
+        builder.AddAttribute(seq++, "class", "form-label");
+        builder.AddContent(seq++, label);
+        builder.CloseElement();
+        builder.OpenComponent<InputNumber<decimal>>(seq++);
+        builder.AddAttribute(seq++, "class", "form-control");
+        builder.AddAttribute(seq++, "Value", value.Amount);
+        builder.AddAttribute(seq++, "ValueChanged", EventCallback.Factory.Create<decimal>(this, v => value.Amount = v));
+        builder.AddAttribute(seq++, "ValueExpression", (Expression<Func<decimal>>)(() => value.Amount));
+        builder.CloseComponent();
+        builder.CloseElement();
+
+        builder.OpenElement(seq++, "div");
+        builder.AddAttribute(seq++, "class", "flex-shrink-0");
+        builder.OpenElement(seq++, "label");
+        builder.AddAttribute(seq++, "class", "form-label");
+        builder.AddContent(seq++, "Zeitraum");
+        builder.CloseElement();
+        builder.OpenComponent<InputSelect<Period>>(seq++);
+        builder.AddAttribute(seq++, "class", "form-select");
+        builder.AddAttribute(seq++, "Value", value.Period);
+        builder.AddAttribute(seq++, "ValueChanged", EventCallback.Factory.Create<Period>(this, v => value.Period = v));
+        builder.AddAttribute(seq++, "ValueExpression", (Expression<Func<Period>>)(() => value.Period));
+        builder.AddAttribute(seq++, "ChildContent", (RenderFragment)(optBuilder =>
+        {
+            var s = 0;
+            optBuilder.OpenElement(s++, "option");
+            optBuilder.AddAttribute(s++, "value", Period.Monthly);
+            optBuilder.AddContent(s++, "monatlich");
+            optBuilder.CloseElement();
+            optBuilder.OpenElement(s++, "option");
+            optBuilder.AddAttribute(s++, "value", Period.Yearly);
+            optBuilder.AddContent(s++, "jaehrlich");
+            optBuilder.CloseElement();
+        }));
+        builder.CloseComponent();
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private void OnSaved()
+    {
+        Saved = true;
+    }
+
+    private async Task OnOcrFileSelected(InputFileChangeEventArgs e)
+    {
+        OcrError = null;
+        OcrStatus = null;
+        if (e.File == null) return;
+
+        try
+        {
+            OcrBusy = true;
+            var base64 = await ReadAsBase64Async(e.File, 8 * 1024 * 1024); // 8 MB limit
+            var text = await JS.InvokeAsync<string>("runOcrBase64", base64);
+
+            var parsed = OcrService.Parse(text);
+            ApplyParsedNotice(parsed);
+            OcrStatus = "OCR ausgefuehrt und Felder befuellt. Bitte pruefen.";
+            Saved = false;
+        }
+        catch (Exception ex)
+        {
+            OcrError = $"OCR fehlgeschlagen: {ex.Message}";
+        }
+        finally
+        {
+            OcrBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    private static async Task<string> ReadAsBase64Async(IBrowserFile file, long maxBytes)
+    {
+        await using var stream = file.OpenReadStream(maxBytes);
+        using var ms = new MemoryStream();
+        await stream.CopyToAsync(ms);
+        return Convert.ToBase64String(ms.ToArray());
+    }
+
+    private void ApplyParsedNotice(TaxNoticeParsed parsed)
+    {
+        // Switch to detailed mode and fill monthly fields where available.
+        Model.Mode = IncomeEntryMode.Detailed;
+
+        if (parsed.AnnualWageIncome is decimal wage)
+        {
+            Model.Gross.Amount = Decimal.Round(wage / 12m, 2, MidpointRounding.AwayFromZero);
+            Model.Gross.Period = Period.Monthly;
+        }
+
+        decimal? taxes = null;
+        if (parsed.AnnualTaxesWithheld is decimal withheld && withheld > 0)
+            taxes = withheld;
+        else if (parsed.AnnualIncomeTax is decimal tax)
+            taxes = tax + (parsed.AnnualSolidaritySurcharge ?? 0) + (parsed.AnnualChurchTax ?? 0);
+
+        if (taxes is decimal t)
+        {
+            Model.Taxes.Amount = Decimal.Round(t / 12m, 2, MidpointRounding.AwayFromZero);
+            Model.Taxes.Period = Period.Monthly;
+        }
+
+        if (parsed.AnnualPensionAndHealthContrib is decimal soc)
+        {
+            Model.MandatorySocialSec.Amount = Decimal.Round(soc / 12m, 2, MidpointRounding.AwayFromZero);
+            Model.MandatorySocialSec.Period = Period.Monthly;
+            Model.HealthInsurance.Amount = 0;
+        }
+
+        if (parsed.AdvertisingCosts is decimal adv)
+        {
+            Model.JobExpensesAbsolute ??= MoneyInput.Monthly();
+            Model.JobExpensesAbsolute.Amount = Decimal.Round(adv / 12m, 2, MidpointRounding.AwayFromZero);
+            Model.JobExpensesAbsolute.Period = Period.Monthly;
+            Model.JobExpenseRate = 0; // avoid double deduction
+        }
+
+        if (parsed.AnnualTaxRefund is decimal refund)
+        {
+            Model.TaxRefund.Amount = Decimal.Round(refund / 12m, 2, MidpointRounding.AwayFromZero);
+            Model.TaxRefund.Period = Period.Monthly;
+        }
+
+        if (parsed.AnnualNetRentalIncome is decimal rent)
+        {
+            Model.OtherNetIncomes.Amount = Decimal.Round(rent / 12m, 2, MidpointRounding.AwayFromZero);
+            Model.OtherNetIncomes.Period = Period.Monthly;
+        }
+    }
+
+    private void AddProperty()
+    {
+        Model.Properties ??= new();
+        Model.Properties.Add(PropertyIncomeInput.CreateDefault(Model.Properties.Count + 1));
+    }
+
+    private void RemoveProperty(int index)
+    {
+        if (index < 0 || index >= Model.Properties.Count) return;
+        Model.Properties.RemoveAt(index);
+    }
+}
