@@ -68,6 +68,8 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] T007 Create base models/entities that all stories depend on
 - [ ] T008 Configure error handling and logging infrastructure
 - [ ] T009 Setup environment configuration management
+- [ ] T010 Document calculation rule sources and mapping for traceability
+- [ ] T011 Define data handling, reset behavior, and no-external-deps checks
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 

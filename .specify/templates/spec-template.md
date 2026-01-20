@@ -100,6 +100,13 @@
 - **[Entity 1]**: [What it represents, key attributes without implementation]
 - **[Entity 2]**: [What it represents, relationships to other entities]
 
+### Constraints and Compliance *(mandatory)*
+
+- **C-001**: System MUST execute calculations locally with no external service calls.
+- **C-002**: System MUST not add external dependencies without Governance approval.
+- **C-003**: System MUST keep personal data in memory unless users opt to export.
+- **C-004**: Results MUST include the calculation basis (table year/group/bracket).
+
 ## Success Criteria *(mandatory)*
 
 <!--
