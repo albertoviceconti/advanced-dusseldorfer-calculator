@@ -31,11 +31,7 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-- Legal fidelity: Calculation changes cite Dusseldorfer Tabelle year and rules.
-- Local execution: No external service calls or new dependencies without approval.
-- Privacy by default: No logging/persistence of personal data without opt-in.
-- Explainable results: Output includes breakdown and validation clarity.
-- Robust input modeling: Inputs support multi-parent/child cases with validation.
+[Gates determined based on constitution file]
 
 ## Project Structure
 
