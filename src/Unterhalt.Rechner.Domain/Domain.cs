@@ -53,6 +53,10 @@ public sealed class ParentIncome
 
 public interface IDusseldorfTable
 {
+    /// Need by age tier (based on relevant income)
+    int GetNeedByAge(decimal relevantIncome, int age);
+    /// Income group details for display/explanations
+    IncomeGroupInfo GetIncomeGroupInfo(decimal relevantIncome, int age);
     /// Need for adult children (age tier 4) in EUR
     int GetNeed18Plus(decimal combinedParentsRelevantIncome);
     /// Need for a student in own household (flat incl. insurance)
@@ -67,31 +71,74 @@ public interface IDusseldorfTable
     int GetNeed18PlusBySingleIncome(decimal singleRelevantIncome);
 }
 
-public sealed class DusseldorfTable2025 : IDusseldorfTable
+public sealed class DusseldorfTable2026 : IDusseldorfTable
 {
-    // Income bands and needs (age 18+) – simplified
+    // Income bands and needs by age tier (Dusseldorf table 2026)
     private static readonly int[] Grenzen = { 2100, 2500, 2900, 3300, 3700, 4100, 4500, 4900, 5300, 5700, 6400, 7200, 8200, 9700, 11200 };
-    private static readonly int[] BedarfAb18 = { 693, 728, 763, 797, 832, 888, 943, 998, 1054, 1109, 1165, 1220, 1276, 1331, 1386 };
+    private static readonly int[] Prozentsatz = { 100, 105, 110, 115, 120, 128, 136, 144, 152, 160, 168, 176, 184, 192, 200 };
+    private static readonly int[] Bedarf0Bis5 = { 486, 511, 535, 559, 584, 623, 661, 700, 739, 778, 817, 856, 895, 934, 972 };
+    private static readonly int[] Bedarf6Bis11 = { 558, 586, 614, 642, 670, 715, 759, 804, 849, 893, 938, 983, 1027, 1072, 1116 };
+    private static readonly int[] Bedarf12Bis17 = { 653, 686, 719, 751, 784, 836, 889, 941, 993, 1045, 1098, 1150, 1202, 1254, 1306 };
+    private static readonly int[] BedarfAb18 = { 698, 733, 768, 803, 838, 894, 950, 1006, 1061, 1117, 1173, 1229, 1285, 1341, 1396 };
 
     public int GetNeed18Plus(decimal combinedParentsRelevantIncome)
     {
-        var inc = (int)Math.Round(combinedParentsRelevantIncome, 0, MidpointRounding.AwayFromZero);
-        for (int i = 0; i < Grenzen.Length; i++)
-            if (inc <= Grenzen[i]) return BedarfAb18[i];
-        // Above highest tier: conservatively return last table value
-        return BedarfAb18[^1];
+        return GetNeedByIncome(combinedParentsRelevantIncome, BedarfAb18);
     }
 
-    public int GetNeedStudentOwnHousehold() => 990; // 2025 flat rate
-    public int GetChildBenefit() => 255;            // 2025 value
+    public int GetNeedStudentOwnHousehold() => 990; // 2026 flat rate
+    public int GetChildBenefit() => 259;            // 2026 value
     public int GetSelfSupportRegular() => 1750;     // Self-support for adults
     public int GetSelfSupportNecessary() => 1450;   // Reduced self-support (privileged, shortage)
     public int GetNeed18PlusBySingleIncome(decimal singleRelevantIncome)
     {
-        var inc = (int)Math.Round(singleRelevantIncome, 0, MidpointRounding.AwayFromZero);
+        return GetNeed18Plus(singleRelevantIncome);
+    }
+
+    public int GetNeedByAge(decimal relevantIncome, int age)
+    {
+        if (age <= 5) return GetNeedByIncome(relevantIncome, Bedarf0Bis5);
+        if (age <= 11) return GetNeedByIncome(relevantIncome, Bedarf6Bis11);
+        if (age <= 17) return GetNeedByIncome(relevantIncome, Bedarf12Bis17);
+        return GetNeedByIncome(relevantIncome, BedarfAb18);
+    }
+
+    public IncomeGroupInfo GetIncomeGroupInfo(decimal relevantIncome, int age)
+    {
+        var needs = GetNeedsByAge(age);
+        var index = GetGroupIndex(relevantIncome);
+        var lower = index == 0 ? 0 : Grenzen[index - 1] + 1;
+        var upper = Grenzen[index];
+        return new IncomeGroupInfo(
+            index + 1,
+            lower,
+            upper,
+            Prozentsatz[index],
+            needs[0],
+            needs[index]);
+    }
+
+    private static int GetNeedByIncome(decimal relevantIncome, int[] needs)
+    {
+        var index = GetGroupIndex(relevantIncome);
+        return needs[index];
+    }
+
+    private static int[] GetNeedsByAge(int age)
+    {
+        if (age <= 5) return Bedarf0Bis5;
+        if (age <= 11) return Bedarf6Bis11;
+        if (age <= 17) return Bedarf12Bis17;
+        return BedarfAb18;
+    }
+
+    private static int GetGroupIndex(decimal relevantIncome)
+    {
+        var inc = (int)Math.Round(relevantIncome, 0, MidpointRounding.AwayFromZero);
         for (int i = 0; i < Grenzen.Length; i++)
-            if (inc <= Grenzen[i]) return BedarfAb18[i];
-        return BedarfAb18[^1];
+            if (inc <= Grenzen[i]) return i;
+        // Above highest tier: conservatively return last table value
+        return Grenzen.Length - 1;
     }
 }
 
@@ -156,11 +203,21 @@ public sealed record Quote(decimal FatherShare, decimal MotherShare)
 
 public sealed record ChildNeedResult(
     Child Child,
+    decimal RelevantIncomeUsed,
+    IncomeGroupInfo? GroupInfo,
     int TableNeed,
-    int ChildBenefitApplied,
+    decimal ChildBenefitApplied,
     decimal NetNeedAfterBenefit,
     decimal ChildOwnContribution,
     decimal NetNeedAfterOwnIncome);
+
+public sealed record IncomeGroupInfo(
+    int GroupIndex,
+    int LowerBound,
+    int UpperBound,
+    int Percent,
+    int MinimumNeed,
+    int Need);
 
 public sealed record PaymentSplit(decimal FatherPays, decimal MotherPays);
 
@@ -185,43 +242,76 @@ public sealed class SupportCalculator
     public ChildNeedResult ComputeChildNeed(Child c, ParentRelevantIncome incomes)
     {
         int tableNeed;
+        IncomeGroupInfo? groupInfo = null;
+        decimal relevantIncome = 0m;
+        var isMinor = c.Age < 18;
+        var isPrivilegedUnder21 = IsPrivilegedUnder21(c);
         if (c.IsStudent && c.Residence == ResidenceStatus.OwnHousehold)
         {
             tableNeed = _table.GetNeedStudentOwnHousehold();
         }
         else
         {
-            // Adult child in a parent's household -> table (age tier 18+), based on combined income
-            var combined = incomes.Father + incomes.Mother;
-            tableNeed = _table.GetNeed18Plus(combined);
+            if (isMinor && c.Residence != ResidenceStatus.OwnHousehold)
+            {
+                // Minor -> based on bar parent's income only
+                relevantIncome = GetBarParentIncome(c.Residence, incomes);
+            }
+            else
+            {
+                // Adult child in a parent's household -> table (age tier 18+), based on combined income
+                relevantIncome = incomes.Father + incomes.Mother;
+            }
+
+            tableNeed = _table.GetNeedByAge(relevantIncome, c.Age);
+            groupInfo = _table.GetIncomeGroupInfo(relevantIncome, c.Age);
         }
 
-        var benefit = c.KindergeldActive ? _table.GetChildBenefit() : 0;
-        var netAfterBenefit = Math.Max(0, tableNeed - benefit);
+        var benefit = c.KindergeldActive
+            ? (isMinor ? _table.GetChildBenefit() / 2m : _table.GetChildBenefit())
+            : 0m;
+        var netAfterBenefit = Math.Max(0m, tableNeed - benefit);
 
         var childContribution = ComputeChildOwnContribution(c);
-        var netAfterOwnIncome = Math.Max(0, netAfterBenefit - childContribution);
+        var netAfterOwnIncome = Math.Max(0m, netAfterBenefit - childContribution);
 
-        return new ChildNeedResult(c, tableNeed, benefit, netAfterBenefit, childContribution, netAfterOwnIncome);
+        return new ChildNeedResult(c, relevantIncome, groupInfo, tableNeed, benefit, netAfterBenefit, childContribution, netAfterOwnIncome);
     }
 
     public PaymentSplit SplitByQuote(ChildNeedResult need, ParentRelevantIncome incomes, bool privilegedUnder21AllowsLowerSB = false)
     {
-        // Self-support thresholds
-        int selfSupport = privilegedUnder21AllowsLowerSB ? _table.GetSelfSupportNecessary() : _table.GetSelfSupportRegular();
+        var isMinor = need.Child.Age < 18;
+        var isPrivilegedUnder21 = privilegedUnder21AllowsLowerSB;
 
-        var fatherAvail = Math.Max(0, incomes.Father - selfSupport);
-        var motherAvail = Math.Max(0, incomes.Mother - selfSupport);
+        if (isMinor && need.Child.Residence != ResidenceStatus.OwnHousehold)
+        {
+            int barSelfSupport = _table.GetSelfSupportNecessary();
+            bool fatherIsBar = need.Child.Residence == ResidenceStatus.WithMother;
+            bool motherIsBar = need.Child.Residence == ResidenceStatus.WithFather;
+
+            var barIncome = fatherIsBar ? incomes.Father : incomes.Mother;
+            var available = Math.Max(0m, barIncome - barSelfSupport);
+            var pay = Math.Min(need.NetNeedAfterOwnIncome, available);
+
+            return new PaymentSplit(fatherIsBar ? pay : 0m, motherIsBar ? pay : 0m);
+        }
+
+        // Self-support thresholds (regular for adult children)
+        int selfSupport = isPrivilegedUnder21 ? _table.GetSelfSupportNecessary() : _table.GetSelfSupportRegular();
+
+        var fatherAvail = Math.Max(0m, incomes.Father - selfSupport);
+        var motherAvail = Math.Max(0m, incomes.Mother - selfSupport);
 
         var quote = Quote.FromAvailable(fatherAvail, motherAvail);
         var fatherShare = decimal.Round(need.NetNeedAfterOwnIncome * quote.FatherShare, 2, MidpointRounding.AwayFromZero);
         var motherShare = decimal.Round(need.NetNeedAfterOwnIncome * quote.MotherShare, 2, MidpointRounding.AwayFromZero);
 
         // Liability cap: each at most what they would owe alone
-        var fatherSoloNeed = _table.GetNeed18PlusBySingleIncome(incomes.Father);
-        var motherSoloNeed = _table.GetNeed18PlusBySingleIncome(incomes.Mother);
-        var fatherSoloPay = Math.Max(0, fatherSoloNeed - need.ChildBenefitApplied - need.ChildOwnContribution);
-        var motherSoloPay = Math.Max(0, motherSoloNeed - need.ChildBenefitApplied - need.ChildOwnContribution);
+        var usesFlatNeed = need.Child.IsStudent && need.Child.Residence == ResidenceStatus.OwnHousehold;
+        var fatherSoloNeed = usesFlatNeed ? need.TableNeed : _table.GetNeedByAge(incomes.Father, need.Child.Age);
+        var motherSoloNeed = usesFlatNeed ? need.TableNeed : _table.GetNeedByAge(incomes.Mother, need.Child.Age);
+        var fatherSoloPay = Math.Max(0m, fatherSoloNeed - need.ChildBenefitApplied - need.ChildOwnContribution);
+        var motherSoloPay = Math.Max(0m, motherSoloNeed - need.ChildBenefitApplied - need.ChildOwnContribution);
 
         fatherShare = Math.Min(fatherShare, fatherSoloPay);
         motherShare = Math.Min(motherShare, motherSoloPay);
@@ -239,5 +329,20 @@ public sealed class SupportCalculator
 
         // Do not contribute more than the calculated need after child benefit.
         return contribution;
+    }
+
+    private static decimal GetBarParentIncome(ResidenceStatus residence, ParentRelevantIncome incomes)
+    {
+        return residence switch
+        {
+            ResidenceStatus.WithMother => incomes.Father,
+            ResidenceStatus.WithFather => incomes.Mother,
+            _ => incomes.Father + incomes.Mother
+        };
+    }
+
+    private static bool IsPrivilegedUnder21(Child child)
+    {
+        return child.Age < 21 && child.IsInGeneralSchool && child.Residence != ResidenceStatus.OwnHousehold;
     }
 }

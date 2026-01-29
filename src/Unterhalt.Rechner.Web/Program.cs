@@ -6,7 +6,7 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 builder.Services.AddRazorPages();
 builder.Services.AddServerSideBlazor();
-builder.Services.AddSingleton<IDusseldorfTable, DusseldorfTable2025>();
+builder.Services.AddSingleton<IDusseldorfTable, DusseldorfTable2026>();
 builder.Services.AddSingleton<IncomeCalculator>();
 builder.Services.AddTransient<SupportCalculator>();
 builder.Services.AddScoped<CalculationState>();

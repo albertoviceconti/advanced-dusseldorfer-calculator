@@ -2,8 +2,10 @@
 @using System.IO
 @using System.Text
 @using System.Text.Json
+@using Microsoft.AspNetCore.Components
 @inject CalculationState State
 @inject SupportCalculator Calculator
+@inject IDusseldorfTable Table
 @inject IJSRuntime JS
 
 <PageTitle>Ergebnis</PageTitle>
@@ -38,20 +40,59 @@ else
             <div class="card-body row">
                 <div class="col-md-6">
                     <h6>Bedarf</h6>
+                    <fieldset class="border rounded p-3 mb-2">
+                        <legend class="float-none w-auto px-2">Ermittlung des Gesamtbedarfs</legend>
+                    @if (row.Need.GroupInfo is not null)
+                    {
+                        <ul class="mb-2">
+                            <li>@BuildIncomeLine(row)</li>
+                            <li>@BuildGroupLine(row)</li>
+                            <li>@BuildNeedLine(row)</li>
+                            <li>@BuildKindergeldLine(row)</li>
+                            <li>@BuildRestNeedLine(row)</li>
+                        </ul>
+                    }
+                    else
+                    {
+                        <ul class="mb-2">
+                            <li>Bedarfssatz: Pauschale für Studierende im eigenen Haushalt: <em>@row.Need.TableNeed</em> EUR.</li>
+                            <li>@BuildKindergeldLine(row)</li>
+                            <li>@BuildRestNeedLine(row)</li>
+                        </ul>
+                    }
+                    </fieldset>
                     <ul>
                         <li>Tabellenbedarf: <strong>@row.Need.TableNeed</strong> EUR</li>
-                        <li>Kindergeld angerechnet: <strong>@row.Need.ChildBenefitApplied</strong> EUR</li>
-                        <li>Netto-Bedarf nach Kindergeld: <strong>@row.Need.NetNeedAfterBenefit</strong> EUR</li>
-                        <li>Eigenes Einkommen (Minijob) angerechnet: <strong>@row.Need.ChildOwnContribution.ToString("N2")</strong> EUR</li>
-                        <li>Rest-Bedarf nach Minijob: <strong>@row.Need.NetNeedAfterOwnIncome.ToString("N2")</strong> EUR</li>
+                        <li>Kindergeld angerechnet: <strong>@row.Need.ChildBenefitApplied.ToString("N2")</strong> EUR</li>
+                        <li>Netto-Bedarf nach Kindergeld: <strong>@row.Need.NetNeedAfterBenefit.ToString("N2")</strong> EUR</li>
+                        @if (row.Need.ChildOwnContribution > 0)
+                        {
+                            <li>Eigenes Einkommen (Minijob) angerechnet: <strong>@row.Need.ChildOwnContribution.ToString("N2")</strong> EUR</li>
+                            <li>Rest-Bedarf nach Minijob: <strong>@row.Need.NetNeedAfterOwnIncome.ToString("N2")</strong> EUR</li>
+                        }
                     </ul>
                 </div>
                 <div class="col-md-6">
                     <h6>Zahlung</h6>
+                    <fieldset class="border rounded p-3 mb-2">
+                        <legend class="float-none w-auto px-2">Berechnung der Haftungsanteile</legend>
+                        <ul class="mb-2">
+                            @foreach (var line in BuildLiabilityLines(row))
+                            {
+                                <li>@line</li>
+                            }
+                        </ul>
+                    </fieldset>
                     <ul>
                         <li>Vater zahlt: <strong>@row.Split.FatherPays.ToString("N2")</strong> EUR</li>
                         <li>Mutter zahlt: <strong>@row.Split.MotherPays.ToString("N2")</strong> EUR</li>
                     </ul>
+                    @if (row.Child.Age < 18 && row.Child.Residence != ResidenceStatus.OwnHousehold)
+                    {
+                        <div class="text-muted small">
+                            Hinweis: Der betreuende Elternteil leistet Naturalunterhalt, barunterhaltspflichtig ist der andere Elternteil.
+                        </div>
+                    }
                 </div>
             </div>
         </div>
@@ -170,4 +211,112 @@ else
     }
 
     private sealed record ResultRow(ChildInput Child, ChildNeedResult Need, PaymentSplit Split);
+
+    private MarkupString BuildIncomeLine(ResultRow row)
+    {
+        var combined = Incomes.Father + Incomes.Mother;
+        if (NearlyEqual(row.Need.RelevantIncomeUsed, combined))
+        {
+            return AsMarkup($"Gesamteinkommen: {FormatEuro(Incomes.Father)} EUR (Vater) + {FormatEuro(Incomes.Mother)} EUR (Mutter) = {FormatEuro(combined)} EUR.");
+        }
+
+        var barParent = row.Child.Residence == ResidenceStatus.WithMother ? "Vater" : "Mutter";
+        return AsMarkup($"Relevantes Einkommen ({barParent} barunterhaltspflichtig): {FormatEuro(row.Need.RelevantIncomeUsed)} EUR.");
+    }
+
+    private MarkupString BuildGroupLine(ResultRow row)
+    {
+        var group = row.Need.GroupInfo;
+        if (group is null) return AsMarkup(string.Empty);
+
+        var range = group.LowerBound == 0
+            ? $"bis {FormatEuroInt(group.UpperBound)} EUR"
+            : $"{FormatEuroInt(group.LowerBound)} EUR bis {FormatEuroInt(group.UpperBound)} EUR";
+
+        return AsMarkup($"Einstufung: Gemäß der Tabelle für {FormatNumberInt(2026)} fällt dieses Einkommen in die {FormatNumberInt(group.GroupIndex)}. Einkommensgruppe ({range}).");
+    }
+
+    private static MarkupString BuildNeedLine(ResultRow row)
+    {
+        var group = row.Need.GroupInfo;
+        if (group is null) return AsMarkup(string.Empty);
+
+        var ageTier = GetAgeTierLabel(row.Child.Age);
+        return AsMarkup($"Bedarfssatz: Für die {ageTier} beträgt der Bedarf in dieser Gruppe {FormatEuroInt(group.Need)} EUR (entspricht {FormatNumberInt(group.Percent)} % des Mindestunterhalts von {FormatEuroInt(group.MinimumNeed)} EUR).");
+    }
+
+    private MarkupString BuildKindergeldLine(ResultRow row)
+    {
+        var appliesFully = row.Child.Age >= 18;
+        var childBenefit = Table.GetChildBenefit();
+        var baseText = appliesFully
+            ? $"Abzug Kindergeld: Das Kindergeld ({FormatNumberInt(2026)}: {FormatEuroInt(childBenefit)} EUR) wird bei Volljährigen voll bedarfsmindernd angerechnet."
+            : $"Abzug Kindergeld: Das Kindergeld ({FormatNumberInt(2026)}: {FormatEuroInt(childBenefit)} EUR) wird bei Minderjährigen zur Hälfte bedarfsmindernd angerechnet.";
+
+        return AsMarkup($"{baseText} Angerechnet: {FormatEuro(row.Need.ChildBenefitApplied)} EUR.");
+    }
+
+    private static MarkupString BuildRestNeedLine(ResultRow row)
+    {
+        return AsMarkup($"Restbedarf: {FormatEuroInt(row.Need.TableNeed)} EUR - {FormatEuro(row.Need.ChildBenefitApplied)} EUR = {FormatEuro(row.Need.NetNeedAfterBenefit)} EUR.");
+    }
+
+    private IEnumerable<MarkupString> BuildLiabilityLines(ResultRow row)
+    {
+        var isMinor = row.Child.Age < 18;
+        var isPrivilegedUnder21 = row.Child.PrivilegedUnder21;
+        var livesWithParent = row.Child.Residence != ResidenceStatus.OwnHousehold;
+
+        if (isMinor && livesWithParent)
+        {
+            var barParent = row.Child.Residence == ResidenceStatus.WithMother ? "Vater" : "Mutter";
+            var selfSupport = Table.GetSelfSupportNecessary();
+            var barIncome = row.Child.Residence == ResidenceStatus.WithMother ? Incomes.Father : Incomes.Mother;
+            var available = Math.Max(0m, barIncome - selfSupport);
+            var pay = Math.Min(row.Need.NetNeedAfterOwnIncome, available);
+
+            return new[]
+            {
+                AsMarkup($"Barunterhaltspflichtig: {barParent} (betreuender Elternteil leistet Naturalunterhalt)."),
+                AsMarkup($"Selbstbehalt (notwendig): {FormatEuroInt(selfSupport)} EUR."),
+                AsMarkup($"Verfügbares Einkommen {barParent}: {FormatEuro(barIncome)} EUR - {FormatEuroInt(selfSupport)} EUR = {FormatEuro(available)} EUR."),
+                AsMarkup($"Zahlbetrag begrenzt auf Restbedarf: {FormatEuro(pay)} EUR.")
+            };
+        }
+
+        var selfSupportUsed = isPrivilegedUnder21 ? Table.GetSelfSupportNecessary() : Table.GetSelfSupportRegular();
+        var fatherAvail = Math.Max(0m, Incomes.Father - selfSupportUsed);
+        var motherAvail = Math.Max(0m, Incomes.Mother - selfSupportUsed);
+        var sumAvail = fatherAvail + motherAvail;
+        var fatherQuote = sumAvail > 0 ? fatherAvail / sumAvail : 0m;
+        var motherQuote = sumAvail > 0 ? motherAvail / sumAvail : 0m;
+
+        return new[]
+        {
+            AsMarkup($"Selbstbehalt: {FormatEuroInt(selfSupportUsed)} EUR je Elternteil."),
+            AsMarkup($"Verfügbares Einkommen Vater: {FormatEuro(Incomes.Father)} EUR - {FormatEuroInt(selfSupportUsed)} EUR = {FormatEuro(fatherAvail)} EUR."),
+            AsMarkup($"Verfügbares Einkommen Mutter: {FormatEuro(Incomes.Mother)} EUR - {FormatEuroInt(selfSupportUsed)} EUR = {FormatEuro(motherAvail)} EUR."),
+            AsMarkup($"Haftungsquote: Vater {FormatPercent(fatherQuote)}, Mutter {FormatPercent(motherQuote)}."),
+            AsMarkup($"Anteil Vater: {FormatEuro(row.Split.FatherPays)} EUR, Anteil Mutter: {FormatEuro(row.Split.MotherPays)} EUR.")
+        };
+    }
+
+    private static string GetAgeTierLabel(int age)
+    {
+        if (age <= 5) return "<em>1</em>. Altersstufe (<em>0</em>-<em>5</em> Jahre)";
+        if (age <= 11) return "<em>2</em>. Altersstufe (<em>6</em>-<em>11</em> Jahre)";
+        if (age <= 17) return "<em>3</em>. Altersstufe (<em>12</em>-<em>17</em> Jahre)";
+        return "<em>4</em>. Altersstufe (ab <em>18</em> Jahre)";
+    }
+
+    private static string FormatEuro(decimal amount) => $"<em>{amount:N2}</em>";
+    private static string FormatEuroInt(int amount) => $"<em>{amount:N0}</em>";
+    private static string FormatNumberInt(int amount) => $"<em>{amount:N0}</em>";
+    private static string FormatPercent(decimal value) => $"<em>{value * 100m:N2} %</em>";
+    private static MarkupString AsMarkup(string value) => new(value);
+
+    private static bool NearlyEqual(decimal left, decimal right)
+    {
+        return Math.Abs(left - right) < 0.01m;
+    }
 }
